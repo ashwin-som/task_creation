@@ -7,6 +7,7 @@ from app.database import engine, get_db
 from app.utils import get_pagination_links, get_hateoas_links
 from starlette.responses import JSONResponse
 import datetime
+import time
 import asyncio
 
 app = FastAPI()
@@ -23,13 +24,13 @@ async def log_requests(request: Request, call_next):
     logger.info(f"Request: {request.method} {request.url}")
 
     # Log before the request is processed
-    start_time = datetime.time.time()
+    start_time = time.perf_counter()
 
     # Call the next process in the pipeline
     response = await call_next(request)
 
     # Log after the request is processed
-    process_time = datetime.time.time() - start_time
+    process_time = time.perf_counter() - start_time
     logger.info(
         f"Response status: {response.status_code} | Time: {process_time:.4f}s")
 
@@ -70,9 +71,9 @@ async def create_task(request: Request, task: schemas.TaskCreate, db: AsyncSessi
 
 
 @app.get("/tasks/", response_model=schemas.PaginatedTaskResponse)
-def list_tasks(request: Request, page: int = 1, size: int = 10, db: Session = Depends(get_db)):  # Changed to Session
+async def list_tasks(request: Request, page: int = 1, size: int = 10, db: Session = Depends(get_db)):  # Changed to Session
     # Call the synchronous CRUD function
-    tasks, total = crud.get_tasks(db, page, size)
+    tasks, total = await crud.get_tasks(db, page, size)
     items = [
         schemas.TaskResponse(
             task_id=task.task_id,

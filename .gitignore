@@ -6,6 +6,9 @@ __pycache__/
 # C extensions
 *.so
 
+# EC2
+task.pem
+
 # Distribution / packaging
 .Python
 build/
