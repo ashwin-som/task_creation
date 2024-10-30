@@ -1,5 +1,5 @@
 import logging
-from fastapi import FastAPI, Depends, HTTPException, Request, status, Response
+from fastapi import FastAPI, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from app import models, crud, schemas
@@ -24,13 +24,13 @@ async def log_requests(request: Request, call_next):
     logger.info(f"Request: {request.method} {request.url}")
 
     # Log before the request is processed
-    start_time = time.time()
+    start_time = time.perf_counter()
 
     # Call the next process in the pipeline
     response = await call_next(request)
 
     # Log after the request is processed
-    process_time = time.time() - start_time
+    process_time = time.perf_counter() - start_time
     logger.info(
         f"Response status: {response.status_code} | Time: {process_time:.4f}s")
 
@@ -71,8 +71,8 @@ async def create_task(request: Request, task: schemas.TaskCreate, db: AsyncSessi
 
 
 @app.get("/tasks/", response_model=schemas.PaginatedTaskResponse)
-async def list_tasks(request: Request, page: int = 1, size: int = 10, db: AsyncSession = Depends(get_db)):
-    # Await the asynchronous CRUD function
+async def list_tasks(request: Request, page: int = 1, size: int = 10, db: Session = Depends(get_db)):  # Changed to Session
+    # Call the synchronous CRUD function
     tasks, total = await crud.get_tasks(db, page, size)
     items = [
         schemas.TaskResponse(
@@ -117,47 +117,35 @@ async def read_task(task_id: int, db: AsyncSession = Depends(get_db)):
 @app.put("/tasks/{task_id}", response_model=schemas.TaskResponse)
 async def update_task(
     task_id: int,
+    request: Request,
     task: schemas.TaskUpdate,
     db: AsyncSession = Depends(get_db)
 ):
-    # Fetch the task to update
     db_task = await crud.get_task(db, task_id)
     if not db_task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    # Apply updates only to provided fields
-    if task.title is not None:
-        db_task.title = task.title
-    if task.description is not None:
-        db_task.description = task.description
-    if task.priority is not None:
-        db_task.priority = task.priority
-    if task.due_date is not None:
-        db_task.due_date = task.due_date
-
-    # Update the task status and timestamp
-    db_task.status = task.status if task.status else db_task.status
-    db_task.updated_at = datetime.datetime.utcnow()
-
-    # Commit the updates to the database
+    # Set task status to "pending" before update
+    db_task.status = "pending"
     await db.commit()
-    await db.refresh(db_task)  # Refresh to get the updated fields
 
-    # Construct the response data with updated links
-    response_data = schemas.TaskResponse(
-        task_id=db_task.task_id,
-        title=db_task.title,
-        description=db_task.description,
-        status=db_task.status,
-        priority=db_task.priority,
-        due_date=db_task.due_date,
-        created_at=db_task.created_at,
-        updated_at=db_task.updated_at,
-        links=get_hateoas_links(task_id=db_task.task_id)
-    )
+    # Simulate an asynchronous update process
+    await asyncio.sleep(5)  # Simulating processing delay
 
-    # Return the updated task data
-    return JSONResponse(status_code=status.HTTP_200_OK, content=response_data.dict())
+    # Update task fields with the new data
+    db_task.title = task.title if task.title is not None else db_task.title
+    db_task.description = task.description if task.description is not None else db_task.description
+    db_task.status = "completed"  # Set the task status to completed
+    db_task.priority = task.priority if task.priority is not None else db_task.priority
+    db_task.due_date = task.due_date if task.due_date is not None else db_task.due_date
+    db_task.updated_at = datetime.datetime.utcnow()  # Update the timestamp
+
+    # Commit changes to the database
+    await db.commit()
+
+    # Return 202 Accepted with the location of the task for polling
+    headers = {"Location": f"{request.url}"}
+    return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content={"message": "Task update accepted."}, headers=headers)
 
 
 @app.delete("/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -168,4 +156,4 @@ async def delete_task(task_id: int, db: AsyncSession = Depends(get_db)):
 
     await db.delete(db_task)
     await db.commit()
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    return JSONResponse(status_code=status.HTTP_204_NO_CONTENT)
