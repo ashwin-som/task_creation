@@ -114,38 +114,47 @@ async def read_task(task_id: int, db: AsyncSession = Depends(get_db)):
     return response_data
 
 
-@app.put("/tasks/{task_id}", response_model=schemas.TaskResponse)
+@app.put("/tasks/{task_id}", response_model=schemas.TaskResponse, status_code=status.HTTP_200_OK)
 async def update_task(
     task_id: int,
     request: Request,
     task: schemas.TaskUpdate,
     db: AsyncSession = Depends(get_db)
 ):
+    # Fetch the task to be updated
     db_task = await crud.get_task(db, task_id)
     if not db_task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    # Set task status to "pending" before update
-    db_task.status = "pending"
-    await db.commit()
+    # Update task fields based on the incoming data
+    # Only include fields explicitly set in the request
+    update_data = task.dict(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(db_task, key, value)
 
-    # Simulate an asynchronous update process
-    await asyncio.sleep(5)  # Simulating processing delay
-
-    # Update task fields with the new data
-    db_task.title = task.title if task.title is not None else db_task.title
-    db_task.description = task.description if task.description is not None else db_task.description
-    db_task.status = "completed"  # Set the task status to completed
-    db_task.priority = task.priority if task.priority is not None else db_task.priority
-    db_task.due_date = task.due_date if task.due_date is not None else db_task.due_date
     db_task.updated_at = datetime.datetime.utcnow()  # Update the timestamp
 
-    # Commit changes to the database
+    # Commit the changes to the database
     await db.commit()
+    await db.refresh(db_task)  # Refresh to get the updated data
 
-    # Return 202 Accepted with the location of the task for polling
+    # Prepare response data
+    response_data = schemas.TaskResponse(
+        task_id=db_task.task_id,
+        title=db_task.title,
+        description=db_task.description,
+        status=db_task.status,
+        priority=db_task.priority,
+        due_date=db_task.due_date,
+        created_at=db_task.created_at,
+        updated_at=db_task.updated_at,
+        links=get_hateoas_links(task_id=db_task.task_id)
+    )
+
+    # Set the headers for HATEOAS links
     headers = {"Location": f"{request.url}"}
-    return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content={"message": "Task update accepted."}, headers=headers)
+
+    return JSONResponse(status_code=status.HTTP_200_OK, content=response_data.dict(), headers=headers)
 
 
 @app.delete("/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
