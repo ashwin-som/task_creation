@@ -18,10 +18,20 @@ async def create_task(db: AsyncSession, task: TaskCreate):
     return db_task
 
 
-async def get_tasks(db: AsyncSession, page: int, size: int) -> (List[Task], int):
-    total = await db.scalar(select(func.count(Task.task_id)))
-    result = await db.execute(select(Task).offset((page - 1) * size).limit(size))
+async def get_tasks(db: AsyncSession, page: int, size: int, user_id: int = None) -> (List[Task], int):
+    query = select(Task)
+
+    # Apply the filter if user_id is provided
+    if user_id:
+        query = query.where(Task.user_id == user_id)
+
+    # Get total count with the filter applied
+    total = await db.scalar(select(func.count(Task.task_id)).where(Task.user_id == user_id) if user_id else select(func.count(Task.task_id)))
+
+    # Execute query with pagination
+    result = await db.execute(query.offset((page - 1) * size).limit(size))
     tasks = result.scalars().all()
+
     return tasks, total
 
 

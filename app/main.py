@@ -71,9 +71,15 @@ async def create_task(request: Request, task: schemas.TaskCreate, db: AsyncSessi
 
 
 @app.get("/tasks/", response_model=schemas.PaginatedTaskResponse)
-async def list_tasks(request: Request, page: int = 1, size: int = 10, db: Session = Depends(get_db)):  # Changed to Session
-    # Call the synchronous CRUD function
-    tasks, total = await crud.get_tasks(db, page, size)
+async def list_tasks(
+    request: Request,
+    page: int = 1,
+    size: int = 10,
+    user_id: int = None,  # Optional query parameter
+    db: Session = Depends(get_db)
+):
+    # Call the synchronous CRUD function with the user_id filter
+    tasks, total = await crud.get_tasks(db, page, size, user_id)
     items = [
         schemas.TaskResponse(
             task_id=task.task_id,
@@ -89,7 +95,8 @@ async def list_tasks(request: Request, page: int = 1, size: int = 10, db: Sessio
     ]
 
     links = get_pagination_links(
-        request=request, page=page, size=size, total=total)
+        request=request, page=page, size=size, total=total
+    )
     return {"items": items, "total": total, "page": page, "size": size, "links": links}
 
 
