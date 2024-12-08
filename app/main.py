@@ -1,14 +1,14 @@
 import logging
-from fastapi import FastAPI, Depends, HTTPException, Request, status
-from sqlalchemy.ext.asyncio import AsyncSession
+import time
 from sqlalchemy.orm import Session
+import datetime
+from fastapi import FastAPI, Depends, HTTPException, Request, status
+from fastapi.background import BackgroundTasks
+from sqlalchemy.ext.asyncio import AsyncSession
 from app import models, crud, schemas
 from app.database import engine, get_db
 from app.utils import get_pagination_links, get_hateoas_links
 from starlette.responses import JSONResponse
-import datetime
-import time
-import asyncio
 
 app = FastAPI()
 
@@ -22,52 +22,58 @@ logger = logging.getLogger(__name__)
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     logger.info(f"Request: {request.method} {request.url}")
-
-    # Log before the request is processed
     start_time = time.perf_counter()
-
-    # Call the next process in the pipeline
     response = await call_next(request)
-
-    # Log after the request is processed
     process_time = time.perf_counter() - start_time
     logger.info(
         f"Response status: {response.status_code} | Time: {process_time:.4f}s")
-
     return response
 
 # Define lifespan as an async generator
 
 
 async def lifespan(app: FastAPI):
-    # Startup logic
     async with engine.begin() as conn:
         await conn.run_sync(models.Base.metadata.create_all)
-
     yield  # End of startup phase
 
-# Set the lifespan handler
 app.lifespan = lifespan
 
+# In-memory store for tracking pending tasks
+pending_tasks = {}
 
-@app.post("/tasks/", response_model=schemas.TaskResponse, status_code=status.HTTP_201_CREATED)
-async def create_task(request: Request, task: schemas.TaskCreate, db: AsyncSession = Depends(get_db)):
-    db_task = await crud.create_task(db=db, task=task)
 
-    response_data = schemas.TaskResponse(
-        task_id=db_task.task_id,
-        title=db_task.title,
-        description=db_task.description,
-        status=db_task.status,
-        priority=db_task.priority,
-        due_date=db_task.due_date,
-        created_at=db_task.created_at,
-        updated_at=db_task.updated_at,
-        links=get_hateoas_links(task_id=db_task.task_id)
-    )
+@app.post("/tasks/async-create", status_code=status.HTTP_202_ACCEPTED)
+async def async_create_task(
+    request: Request,
+    task: schemas.TaskCreate,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Asynchronously create a task and return a 202 Accepted response.
+    """
+    placeholder_task_id = f"temp-{int(time.time() * 1000)}"
+    logger.info(f"Task creation accepted: {placeholder_task_id}")
+    pending_tasks[placeholder_task_id] = "processing"
 
-    headers = {"Location": f"{request.url}/{db_task.task_id}"}
-    return JSONResponse(status_code=status.HTTP_201_CREATED, content=response_data.dict(), headers=headers)
+    async def create_task_in_background():
+        db_task = await crud.create_task(db=db, task=task)
+        logger.info(f"Task successfully created: {db_task.task_id}")
+        # Remove placeholder and map to actual task ID if needed
+        pending_tasks.pop(placeholder_task_id, None)
+
+    # Add the task to background processing
+    background_tasks.add_task(create_task_in_background)
+
+    # Respond with 202 and placeholder ID
+    headers = {"Location": f"{request.url}/{placeholder_task_id}"}
+    response_data = {
+        "message": "Task creation in progress",
+        "task_id": placeholder_task_id
+    }
+
+    return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=response_data, headers=headers)
 
 
 @app.get("/tasks", response_model=schemas.PaginatedTaskResponse)
@@ -101,11 +107,28 @@ async def list_tasks(
 
 
 @app.get("/tasks/{task_id}", response_model=schemas.TaskResponse)
-async def read_task(task_id: int, db: AsyncSession = Depends(get_db)):
+async def read_task(task_id: str, db: AsyncSession = Depends(get_db)):
+    """
+    Get task details or handle pending tasks.
+    """
+    # Check if the task is in progress
+    if task_id.startswith("temp-"):
+        if task_id in pending_tasks:
+            return {
+                "task_id": task_id,
+                "status": "processing",
+                "message": "The task is still being created. Please check back later."
+            }
+        else:
+            raise HTTPException(
+                status_code=404, detail="Task not found or already processed.")
+
+    # Fetch the task from the database
     db_task = await crud.get_task(db, task_id)
     if not db_task:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    # Construct response for completed task
     response_data = schemas.TaskResponse(
         task_id=db_task.task_id,
         title=db_task.title,
@@ -121,31 +144,9 @@ async def read_task(task_id: int, db: AsyncSession = Depends(get_db)):
     return response_data
 
 
-@app.put("/tasks/{task_id}", response_model=schemas.TaskResponse, status_code=status.HTTP_200_OK)
-async def update_task(
-    task_id: int,
-    request: Request,
-    task: schemas.TaskUpdate,
-    db: AsyncSession = Depends(get_db)
-):
-    # Fetch the task to be updated
-    db_task = await crud.get_task(db, task_id)
-    if not db_task:
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    # Update task fields based on the incoming data
-    # Only include fields explicitly set in the request
-    update_data = task.dict(exclude_unset=True)
-    for key, value in update_data.items():
-        setattr(db_task, key, value)
-
-    db_task.updated_at = datetime.datetime.utcnow()  # Update the timestamp
-
-    # Commit the changes to the database
-    await db.commit()
-    await db.refresh(db_task)  # Refresh to get the updated data
-
-    # Prepare response data
+@app.post("/tasks", response_model=schemas.TaskResponse, status_code=status.HTTP_201_CREATED)
+async def create_task(request: Request, task: schemas.TaskCreate, db: AsyncSession = Depends(get_db)):
+    db_task = await crud.create_task(db=db, task=task)
     response_data = schemas.TaskResponse(
         task_id=db_task.task_id,
         title=db_task.title,
@@ -157,11 +158,8 @@ async def update_task(
         updated_at=db_task.updated_at,
         links=get_hateoas_links(task_id=db_task.task_id)
     )
-
-    # Set the headers for HATEOAS links
-    headers = {"Location": f"{request.url}"}
-
-    return JSONResponse(status_code=status.HTTP_200_OK, content=response_data.dict(), headers=headers)
+    headers = {"Location": f"{request.url}/{db_task.task_id}"}
+    return JSONResponse(status_code=status.HTTP_201_CREATED, content=response_data.dict(), headers=headers)
 
 
 @app.delete("/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -169,7 +167,6 @@ async def delete_task(task_id: int, db: AsyncSession = Depends(get_db)):
     db_task = await crud.get_task(db, task_id)
     if not db_task:
         raise HTTPException(status_code=404, detail="Task not found")
-
     await db.delete(db_task)
     await db.commit()
     return JSONResponse(status_code=status.HTTP_204_NO_CONTENT)
