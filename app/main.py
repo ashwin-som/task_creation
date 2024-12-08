@@ -70,7 +70,7 @@ async def create_task(request: Request, task: schemas.TaskCreate, db: AsyncSessi
     return JSONResponse(status_code=status.HTTP_201_CREATED, content=response_data.dict(), headers=headers)
 
 
-@app.get("/tasks/", response_model=schemas.PaginatedTaskResponse)
+@app.get("/tasks", response_model=schemas.PaginatedTaskResponse)
 async def list_tasks(
     request: Request,
     page: int = 1,
