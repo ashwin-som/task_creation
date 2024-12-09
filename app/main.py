@@ -143,6 +143,35 @@ async def read_task(task_id: str, db: AsyncSession = Depends(get_db)):
 
     return response_data
 
+@app.put("/tasks/{task_id}", response_model=schemas.TaskResponse, status_code=status.HTTP_200_OK)
+async def update_task(
+    task_id: int,
+    request: Request,
+    task: schemas.TaskUpdate,
+    db: AsyncSession = Depends(get_db)
+):
+    # Fetch the task to be updated
+    db_task = await crud.get_task(db, task_id)
+    if not db_task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    # Update task fields based on the incoming data
+    # Only include fields explicitly set in the request
+    update_data = task.dict(exclude_unset=True)
+    #print('ipdated_data:',update_data)
+    '''for key, value in update_data.items():
+        if value is not None:
+            setattr(db_task, key, value)'''
+    db_task.title = task.title if task.title is not None else db_task.title
+    db_task.description = task.description if task.description is not None else db_task.description
+    db_task.status = "completed"  # Set the task status to completed
+    db_task.priority = task.priority if task.priority is not None else db_task.priority
+    db_task.due_date = task.due_date if task.due_date is not None else db_task.due_date
+    db_task.updated_at = datetime.datetime.utcnow()  # Update the timestamp
+    # Commit the changes to the database
+    await db.commit()
+    #await db.refresh(db_task)  # Refresh to get the updated data
+    headers = {"Location": f"{request.url}"}
+    return JSONResponse(status_code=status.HTTP_200_OK, content={"message": "Task update accepted."}, headers=headers)
 
 @app.post("/tasks", response_model=schemas.TaskResponse, status_code=status.HTTP_201_CREATED)
 async def create_task(request: Request, task: schemas.TaskCreate, db: AsyncSession = Depends(get_db)):
