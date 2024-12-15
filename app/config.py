@@ -7,7 +7,7 @@ load_dotenv()
 
 class Settings(BaseSettings):
     database_url: str
-
+    REDIS_URL: str
     class Config:
         env_file = "../.env"
         extra = "ignore"

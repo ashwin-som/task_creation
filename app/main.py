@@ -2,6 +2,7 @@ import logging
 import time
 from sqlalchemy.orm import Session
 import datetime
+from app.config import settings
 from fastapi import FastAPI, Depends, HTTPException, Request, status
 from fastapi.background import BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +10,10 @@ from app import models, crud, schemas
 from app.database import engine, get_db
 from app.utils import get_pagination_links, get_hateoas_links
 from starlette.responses import JSONResponse
+import asyncio
+import redis.asyncio as aioredis
+import json
+from fastapi.testclient import TestClient
 
 app = FastAPI()
 
@@ -199,3 +204,29 @@ async def delete_task(task_id: int, db: AsyncSession = Depends(get_db)):
     await db.delete(db_task)
     await db.commit()
     return JSONResponse(status_code=status.HTTP_204_NO_CONTENT)
+
+async def process_tasks():
+    redis_connection = await aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+    while True:
+        try: 
+            task_data = await redis_connection.brpop("task_queue")
+            task = json.loads(task_data[1])
+            task_data = task['task_data']
+            task_id = task['task_id']
+            print(f"Executing task: {task}")
+
+            client = TestClient(app)
+            response = client.put(f"/tasks/{task_id}",json=task_data)
+            
+            print(f"Task update completed")
+            return status.HTTP_200_OK
+        except Exception as e:
+            raise HTTPException(
+                status_code=404, detail="Something went wrong")
+
+
+
+
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(process_tasks())
